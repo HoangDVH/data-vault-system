@@ -1,121 +1,115 @@
 # DECISION_LOG — Data Vault System
 
-**Mục đích file (quan trọng nhất):** Đây không phải README kỹ thuật thuần túy, mà là **chứng cứ suy luận** — ghi lại *vì sao* chọn hướng đi, *đánh đổi* gì, *lỗi hiệu năng* gặp trên đường đi và *vai trò AI* trong quá trình đó. Người đọc có thể suy ra: mức độ chủ động, độ sâu kiến trúc, và khả năng **kiểm soát** công cụ thay vì phụ thuộc máy móc.
+**Mục đích:** Ghi lại *vì sao* chọn hướng đi, *đánh đổi* gì, vấn đề hiệu năng và cách xử lý trong code thực tế, cùng vai trò AI — để đánh giá được tư duy kiến trúc chứ không chỉ “tính năng chạy được”.
 
-Phạm vi: monorepo `data-vault-system` — **main-app** (UI React) + **data-vault** (iframe, worker, dữ liệu nặng) + **shared** (giao thức wire).
+**Phạm vi code:** **main-app** (React, iframe parent) · **data-vault** (iframe nhận `postMessage`, điều phối worker) · **shared/vaultProtocol.ts** (envelope có ký, kiểm tra phiên bản và thời gian).
 
----
-
-## 1. Technical choices — Kiến trúc và công nghệ / thuật toán
-
-### 1.1. Tách Main app và Data Vault (iframe, origin khác nhau)
-
-- **Main app** (thường Vite `:5174`): ô tìm kiếm, filter Min/Max ID, bảng ảo hóa, phân trang, bulk insert — tương tác người dùng.
-- **Data vault** (thường `:5173`): chạy trong **iframe**, chứa **worker** và bộ nhớ chứa dòng dữ liệu lớn.
-
-**Lý do (trade-off có ý thức):**
-
-- **Same-Origin Policy:** hai origin tách nhau (`localhost:5173` vs `localhost:5174`) buộc ta không “chia sẻ biến JS” trực tiếp giữa UI và kho dữ liệu; ta chấp nhận chi phối **postMessage** để đổi lấy ranh giới an toàn và tách **đường dữ liệu nặng** khỏi shell UI.
-- **Payload có kiểm soát:** chỉ đẩy qua ranh giới những gì cần cho một request/response (không clone toàn bộ dataset về main thread).
-
-### 1.2. Wire protocol (`shared/vaultProtocol.ts`)
-
-- Phiên bản **`PROTOCOL_VERSION`**, tin nhắn có **timestamp** và **`TIMESTAMP_MAX_SKEW_MS`** để giới hạn cửa sổ chấp nhận (giảm rủi ro replay đơn giản / lệch đồng hồ trong demo).
-- **HMAC-SHA256** khi có shared secret (`VITE_VAULT_SHARED_SECRET`); validate payload theo từng loại (`INIT`, `SEARCH`, `BULK_INSERT`, …).
-
-**Lý do:** iframe messaging không đi qua một API HTTP riêng có middleware chuẩn; **ký + schema** là lớp tối thiểu để tránh tin giả và input bừa bãi trong bối cảnh demo/staging. (Production vẫn cần review thêm: origin policy, rate limit, quản lý secret, threat model.)
-
-### 1.3. Worker + Promise proxy
-
-- Worker `data-vault/src/worker/vault.worker.ts` giữ **mảng dòng** trong memory, xử lý **`INIT`**, **`SEARCH`**, **`BULK_INSERT`**.
-- `workerProxy.ts` nối main thread của iframe với worker theo kiểu Promise/async.
-
-**Lý do:** tách **CPU và bộ nhớ nặng** khỏi luồng UI của iframe; tránh block dài trên main thread khi quét hoặc insert lớn.
-
-### 1.4. Hợp đồng domain (`main-app/src/shared/protocol.ts`)
-
-- Type cho **`User`**, **`SearchPayload`** (keyword, filters, `requestId`, `page`, `pageSize`), **`SearchResponse`** (rows, `totalMatches`, meta phân trang), v.v.
-
-**Lý do:** một nguồn sự thật cho UI và messaging; giảm lệch kiểu giữa vault và main.
-
-### 1.5. UI React — ảo hóa và cảm giác phản hồi
-
-- **`@tanstack/react-virtual`:** chỉ render hàng trong viewport của trang hiện tại → scroll ổn định khi một “trang” dữ liệu có nhiều dòng.
-- **`startTransition`** trong `useSearch`: ưu tiên cảm giác nhập liệu mượt sau khi nhận response.
-- **Debounce** ô tìm kiếm; tránh `await search()` trong `finally` của bulk theo kiểu chặn toàn bộ luồng UI khi không cần.
-
-**Lý do:** bottleneck thường là **số phần tử React** và **tần suất re-render**, không chỉ là thuật toán trong worker.
-
-### 1.6. Thuật toán tìm kiếm trong worker (đủ cho demo)
-
-- Chuẩn hóa **`nameLc`** khi generate để **`includes`** trên chuỗi đã lowercase — tránh gọi `toLowerCase()` lặp trên hot path cho mỗi so khớp.
-- **`SEARCH` phân trang:** một pass quét, đếm **`totalMatches`**, chỉ serializing **`rows` của một trang** (giới hạn `pageSize`, ví dụ max 200).
-- Min/Max ID áp **trước** keyword khi có thể → giảm chi phí so khớp chuỗi khi filter ID đã loại được nhiều dòng.
-
-**Trade-off:** không có inverted index / full-text engine — đơn giản, dễ lý giải; không scale như DB có index. Đây là quyết định **phạm vi bài toán**, không phải quên các hướng khác.
+**Điều quan trọng:** Toàn bộ **dữ liệu người dùng được lưu trong worker dưới dạng mảng trong RAM** (`data-vault/src/worker/vault.worker.ts`). **Không dùng IndexedDB, không LocalStorage cho dataset.**
 
 ---
 
-## 2. Optimization — Hiệu năng đã va chạm và cách xử lý
+## 1. Technical choices — Kiến trúc và code path
 
-| Vấn đề quan sát được | Nguyên nhân gốc (mức cao) | Cách xử lý trong code |
-|----------------------|---------------------------|------------------------|
-| Payload quá lớn qua iframe, React nặng | Trả “full result set” một lần | **Phân trang server-side trong worker**: chỉ gửi một trang + `totalMatches`. |
-| `toLowerCase` trên mỗi lần so khớp | Hot path string trên dataset lớn | **Cột phụ `nameLc`** khi khởi tạo / bulk. |
-| Bulk +50k đơ luồng | Vòng lặp dài chiếm worker, queue message | **`BULK_SLICE`** (16k), sau slice **`await setTimeout(0)`** để nhường event loop — xen kẽ **`SEARCH`**. |
-| Gõ nhanh, kết quả nhảy lộn xộn | Request cũ hoàn thành sau request mới | **`requestId`** + chỉ áp dụng state nếu khớp **`latestRequestId`**. |
-| Bulk xong UI “kẹt” / timeout search | State `bulkWorking` + await search chặn | **`finally`** clear `bulkWorking` **trước** khi fire-and-forget `search()`; timeout **`SEARCH`** đủ lớn cho tập lớn (ví dụ 60s). |
-| Double scroll / layout nhảy | Chiều cao viewport không cố định | Scroll chỉ trong vùng bảng; viewport root cố định. |
+### 1.1. Hard isolation: Main app ↔ Data Vault (iframe, origin khác)
 
-**Điểm senior cần thấy:** tối ưu ở đây là **đoạn pipeline end-to-end** (worker ↔ postMessage ↔ React virtualization ↔ trạng thái async), không chỉ “viết vòng for nhanh hơn”.
+- **Main app** (Vite dev thường `:5174`): UI — ô tìm kiếm (debounce), filter Min/Max ID, bảng ảo hóa, phân trang, nút bulk insert, toast.
+- **Data vault** (thường `:5173`): chạy trong `<iframe>`, không render UI nặng cho parent; nhận RPC qua `postMessage`, forward xuống **Dedicated Worker**.
+
+**Lý do khớp code:**
+
+- Hai **origin** khác nhau → không chia sẻ biến JS trực tiếp; ranh giới buộc thiết kế **chỉ truyền payload nhỏ** qua biên (`postMessage`), không kéo cả `rows[]` về main app.
+- **data-vault** lọc `event.origin` qua `ALLOWED_PARENT_ORIGINS` (mặc định `http://localhost:5174`, `http://127.0.0.1:5174`, cộng thêm `VITE_ALLOWED_PARENT_ORIGINS`) — xem `data-vault/src/main.ts`.
+
+### 1.2. Hai lớp “protocol” (không nhầm lẫn)
+
+1. **Wire giữa parent và iframe** (`shared/vaultProtocol.ts`): envelope có `v`, `id`, `type`, `payload`, `ts`, `sig` — **HMAC-SHA256**, kiểm tra **`PROTOCOL_VERSION`**, **`TIMESTAMP_MAX_SKEW_MS`**, và validate payload theo từng `type` (`INIT`, `GET_DATA`, `SEARCH`, `BULK_INSERT`).
+2. **RPC phía main-app** (`main-app/src/messaging/messageBus.ts`): mỗi lần `send()` tạo **`id` UUID mới**, giữ `Map<id, { resolve, reject }>` cho đến khi nhận response đã verify — tương đương **một pending reply theo correlation id**.
+
+**Lý do:** `postMessage` thô không đủ cho demo có ý thức bảo mật; lớp ký + schema giảm giả mạo và payload sai hình dạng. Secret: `VITE_VAULT_SHARED_SECRET` (fallback dev có trong code — **production phải đổi**).
+
+### 1.3. Worker = storage + compute (in-memory)
+
+- File **`vault.worker.ts`**: biến module **`rows: Row[]`** với `Row = { id, name, nameLc }`.
+- **`INIT`:** `generateData(n)` — dữ liệu demo cố định pattern `"User " + i`.
+- **`GET_DATA`:** trả tối đa **`RESULT_CAP = 1000`** dòng đầu (preview).
+- **`SEARCH`:** **`searchPaginated`** — một vòng **`for` toàn bộ `rows`**, filter theo ID rồi keyword; **không có index phụ**, độ phức tạp **O(n)** mỗi lần search.
+- **`BULK_INSERT`:** `runBulkInsertAsync` — mở rộng mảng, ghi từng slice đồng bộ rồi **`await new Promise(r => setTimeout(r, 0))`** giữa các slice (**`BULK_SLICE = 16_000`**).
+
+**Lý do:** đơn giản, hành vi dễ lý giải và benchmark; persistence / query engine là **ngoài phạm vi** implementation hiện tại.
+
+### 1.4. Hợp đồng domain UI (`main-app/src/shared/protocol.ts`)
+
+- **`SearchPayload`** gồm `keyword`, `requestId`, `filters`, `page`, `pageSize` — khớp payload wire sau validate.
+
+### 1.5. UI: virtualization + ưu tiên cảm giác phản hồi
+
+- **`@tanstack/react-virtual`**: chỉ mount hàng trong viewport — phù hợp vì React state chỉ giữ **một trang** `rows` (tối đa **`MAX_PAGE_SIZE = 200`** ở worker, UI dùng **`PAGE_SIZE = 50`** trong `App.tsx`).
+- **`startTransition`** trong `useSearch`: cập nhật `setData` / meta sau khi có response.
+- **Debounce** ô search trên `App.tsx` giảm số round-trip.
+
+### 1.6. Thuật toán search trong worker (đúng như file)
+
+- **`nameLc`** set lúc generate/bulk — **`includes`** trên `nameLc`, keyword đã `trim().toLowerCase()` một lần ở worker.
+- **Filter ID** trong `rowMatches` **trước** khi xét keyword rỗng / substring — giảm so khớp chuỗi khi lọc ID hẹp.
+- **Phân trang:** cùng một pass, biến `ord` đếm match; chỉ **`push`** vào `out` khi `ord` nằm trong khoảng `[page*pageSize, …)`; **`totalMatches`** cuối cùng chính là số match (trong code sau vòng lặp `ord` đã là tổng số match — xem vòng `for` và chỗ `ord++`).
+
+**Trade-off thẳng thắn:** đây là **linear scan toàn bộ mảng**, không phải indexed query. Với rất lớn *n*, hướng mở rộng thực tế là index trong DB / WASM / service — **chưa có trong repo**.
 
 ---
 
-## 3. AI usage & critical thinking — Phần nào dùng AI, phần nào không
+## 2. Optimization — Điều code thực sự làm
 
-### 3.1. AI đã hỗ trợ hiệu quả ở đâu
+| Hiện tượng | Nguyên nhân | Cách xử lý trong repo |
+|------------|-------------|------------------------|
+| Trả quá nhiều dòng qua iframe / React | Gửi full result set | Worker chỉ trả **`rows` của một trang** + **`totalMatches`**; **`pageSize`** clamp **`1…200`** (`DEFAULT_PAGE_SIZE` 50). |
+| `toLowerCase` lặp trên hot path | So khớp tên | Field **`nameLc`** gắn sẵn mỗi row. |
+| Bulk 50k–1M block worker / không nhận SEARCH | Vòng lặp dài | Slice **`BULK_SLICE` 16k** + **`setTimeout(0)`** giữa slice để nhường macrotask (SEARCH RPC có thể xen vào giữa chừng). |
+| Gõ nhanh, kết quả lệch thứ tự | Response async đến không đúng thứ tự | **`requestId`** per search; trong **`useSearch`** chỉ **`setData`** nếu `requestId === latestRequestId.current`. |
+| Bulk xong cần refresh nhưng không muốn kéo dài “đang bulk” | AI hay gợi ý `await search()` trong `finally` | Trong **`App.tsx`**: trong `finally` chỉ **`setBulkWorking(false)`**; **sau khối `try/catch/finally`** mới **`void search(...)`** — refresh không chặn giải phóng cờ bulk; timeout SEARCH **60s** (`useSearch`), bulk **120s** (`messageBus.send` BULK_INSERT). |
+| Scroll / layout | Chiều cao không cố định | Layout cố định viewport + scroll trong vùng bảng (theo cấu trúc `App` / CSS hiện có). |
 
-- **Boilerplate UI:** component, hook `useSearch`, thanh phân trang, toast, lớp Tailwind đồng bộ.
-- **Điều tra nhanh luồng:** trace `postMessage`, origin, timeout, đường đi bulk → worker.
-- **Đồng bộ protocol:** thêm field phân trang / validate chéo giữa `vaultProtocol`, worker, và client.
-
-### 3.2. Việc con người vẫn phải giữ (không outsource cho AI)
-
-- **Mô hình đe dọa thật:** secret env, production HMAC/CORS/origin — AI chỉ phản ánh policy đã ghi trong code.
-- **Phạm vi kiến trúc:** khi nào đủ “một pass + phân trang” vs khi cần DB/index — AI hay đề xuất “công nghệ nặng” không khớp bài.
-- **Xác nhận bằng chạy thực tế:** hai dev server, secret khớp, bulk 50k, race khi gõ — không thể thay bằng lý thuyết.
-
-### 3.3. Ít nhất một trường hợp: AI đề xuất sai / chưa tối ưu và cách tự chỉnh
-
-**Tình huống:** Khi hoàn thiện luồng **bulk insert** và refresh danh sách sau khi insert, gợi ý ban đầu (AI) là **luôn `await search()` trong `finally`** của bulk — vì “đảm bảo state đồng bộ và luôn có dữ liệu mới nhất”.
-
-**Vì sao đó là chưa phù hợp với bài toán này:**
-
-- `search()` là async qua iframe + worker + có thể timeout dài trên tập lớn; giữ **`await`** trong `finally` kéo dài window mà **`bulkWorking`** hoặc UX loading vẫn có thể gây cảm giác **UI bị khóa** hoặc tranh chấp với các thao tác khác (ví dụ user muốn gõ filter ngay).
-- Trên pipeline đã có **`requestId`** để xử lý race; refresh danh sách không cần “đồng bộ cứng” trong cùng một stack frame với kết thúc bulk.
-
-**Điều chỉnh đã áp dụng:** **clear flag `bulkWorking` (và các trạng thái liên quan) trước**, rồi **gọi `search()` kiểu fire-and-forget** (không `await` trong `finally`), với timeout `SEARCH` đủ lớn cho dataset. Như vậy bulk **kết thúc gọn** về mặt UI, còn tìm kiếm chạy nền với contract async sẵn có.
-
-**Bài học:** Gợi ý AI thường **đúng về mặt “invariant”** (sau bulk cần refresh), nhưng **sai về composition** với luồng async + iframe + trạng thái loading. Senior kiểm tra **thời điểm giải phóng UI** và **độ dài critical section**, không chỉ “code chạy ra kết quả đúng một lần”.
-
-### 3.4. Nguyên tắc dùng AI trong repo này
-
-- Ghi **DECISION_LOG** / comment ngắn tại chỗ **trade-off** (chunk size, page size, timeout).
-- Đổi protocol → cập nhật **đồng thời** vault, main, và file shared.
-- **`tsc` / `vite build` / lint** là tiêu chí tối thiểu trước khi coi task xong — tránh merge “chỉ chạy được trên máy agent”.
+Pipeline cần nhìn xuyên suốt: **worker CPU + độ lớn payload qua iframe + React chỉ giữ một trang + virtual list**.
 
 ---
 
-## Phụ lục — Đường dẫn tham chiếu nhanh
+## 3. AI usage & critical thinking
 
-| Khu vực | Đường dẫn |
+### 3.1. AI phù hợp cho
+
+- Boilerplate React (component, hook, Tailwind).
+- So khớp thay đổi protocol giữa `vaultProtocol`, `messageBus`, `main.ts`, worker.
+
+### 3.2. Người phải tự quyết
+
+- **Đe dọa thật:** origin allowlist, secret, không commit credential.
+- **Phạm vi:** chấp nhận **O(n) scan** trong worker vs đầu tư storage/index — trade-off của bài và giới hạn thời gian.
+- **Chạy thật:** hai cổng dev, bulk lớn, gõ search nhanh để thấy race và timeout.
+
+### 3.3. Ví dụ: AI gợi ý chưa phù hợp → chỉnh theo code
+
+**Gợi ý phổ biến:** sau bulk, **`await search()` ngay trong `finally`** để “đảm bảo đồng bộ”.
+
+**Vấn đề với luồng hiện tại:** `search` qua iframe + verify + worker có thể chạy lâu (timeout 60s); giữ await trong `finally` có thể làm cờ **`bulkWorking`** hoặc trải nghiệm “kết thúc bulk” trễ tách khỏi thực tế.
+
+**Cách làm trong repo:** tắt **`bulkWorking`** trong `finally`, rồi gọi **`void search(...)`** ngay sau đó (không await) — refresh chạy async; đúng thứ tự vẫn được **requestId** xử lý.
+
+**Bài học:** AI hay đúng **invariant** (“sau bulk phải refresh”) nhưng sai **composition** với async boundary và UX loading.
+
+---
+
+## Phụ lục — File chính
+
+| Vai trò | Đường dẫn |
 |---------|-----------|
-| UI chính | `main-app/src/App.tsx`, `main-app/src/components/` |
-| Message + ký | `main-app/src/messaging/messageBus.ts`, `shared/vaultProtocol.ts` |
-| Iframe vault | `data-vault/src/main.ts` |
-| Worker | `data-vault/src/worker/vault.worker.ts`, `data-vault/src/worker/workerProxy.ts` |
-| Contract domain | `main-app/src/shared/protocol.ts` |
+| UI + bulk + debounce | `main-app/src/App.tsx` |
+| Search hook + requestId + transition | `main-app/src/hooks/useSearch.ts` |
+| postMessage RPC + pending map | `main-app/src/messaging/messageBus.ts` |
+| Wire signing / validation | `shared/vaultProtocol.ts` |
+| Iframe + origin + forward worker | `data-vault/src/main.ts` |
+| In-memory rows + SEARCH + BULK | `data-vault/src/worker/vault.worker.ts` |
+| Worker bridge | `data-vault/src/worker/workerProxy.ts` |
+| Types domain | `main-app/src/shared/protocol.ts` |
 
 ---
 
-*Tài liệu phản ánh trạng thái codebase tại thời điểm cập nhật; khi đổi kiến trúc, nên điều chỉnh mục 1–2 cho khớp thực tế.*
+*Cập nhật theo codebase tại thời điểm chỉnh sửa; nếu thêm persistence hoặc index, cần sửa mục 1.3 và 1.6 cho khớp.*
