@@ -167,7 +167,7 @@ export default function App() {
           pageSize: res.pageSize,
           capped: res.capped,
         });
-        setTotalVaultRows(VAULT_INIT_SIZE);
+        setTotalVaultRows(res.totalMatches);
         vaultListReady.current = true;
         skipFirstQuerySync.current = true;
         skipFirstFilterSync.current = true;

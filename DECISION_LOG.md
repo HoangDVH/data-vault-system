@@ -1,6 +1,6 @@
 # DECISION_LOG — Data Vault System
 
-**Điều quan trọng:** Toàn bộ **dữ liệu người dùng được lưu trong worker dưới dạng mảng trong RAM** (`data-vault/src/worker/vault.worker.ts`). **Không dùng IndexedDB, không LocalStorage cho dataset.**
+**Điều quan trọng:** Dataset hoạt động trong **Web Worker** (`rows[]` trong RAM). Sau **bulk insert**, snapshot được **ghi IndexedDB** (`idbSnapshot.ts`); khi reload iframe/worker, snapshot được **đọc lại** trước `INIT`. Seed mặc định (`INIT`, 500k dòng demo) không ghi disk để tránh một lần serialize quá lớn; chỉ mutate qua bulk mới persist.
 
 ---
 
@@ -25,15 +25,16 @@ Hai bên giao tiếp thông qua một **asynchronous message bus** (`postMessage
 
 **Lý do:** `postMessage` thô không đủ cho demo có ý thức bảo mật; lớp ký + schema giảm giả mạo và payload sai hình dạng. Secret: `VITE_VAULT_SHARED_SECRET` (fallback dev có trong code — **production phải đổi**).
 
-### 1.3. Worker = storage + compute (in-memory)
+### 1.3. Worker = storage + compute (RAM + IndexedDB snapshot)
 
-- File **`vault.worker.ts`**: biến module **`rows: Row[]`** với `Row = { id, name, nameLc }`.
-- **`INIT`:** `generateData(n)` — dữ liệu demo cố định pattern `"User " + i`.
+- File **`vault.worker.ts`**: **`rows: Row[]`** — nguồn sự thật trong phiên.
+- **Khởi động:** `restorePromise` đọc **`idbSnapshot.ts`**; nếu có dữ liệu thì **không** seed lại khi `INIT`.
+- **`INIT`:** chỉ `generateData(n)` khi **`rows.length === 0`** (không có snapshot).
 - **`GET_DATA`:** trả tối đa **`RESULT_CAP = 1000`** dòng đầu (preview).
-- **`SEARCH`:** **`searchPaginated`** — một vòng **`for` toàn bộ `rows`**, filter theo ID rồi keyword; **không có index phụ**, độ phức tạp **O(n)** mỗi lần search.
-- **`BULK_INSERT`:** `runBulkInsertAsync` — mở rộng mảng, ghi từng slice đồng bộ rồi **`await new Promise(r => setTimeout(r, 0))`** giữa các slice (**`BULK_SLICE = 16_000`**).
+- **`SEARCH`:** **`searchPaginated`** — **O(n)** scan, không index phụ.
+- **`BULK_INSERT`:** slice **`BULK_SLICE = 16_000`** + yield; **cuối cùng `saveRowsSnapshot(rows)`** để reload giữ inserted rows.
 
-**Lý do:** đơn giản, hành vi dễ lý giải và benchmark; persistence / query engine là **ngoài phạm vi** implementation hiện tại.
+**Trade-off:** snapshot là **full array** trong một key IDB — đơn giản; dataset rất lớn có thể chậm khi ghi (chấp nhận sau bulk).
 
 ### 1.4. Hợp đồng domain UI (`main-app/src/shared/protocol.ts`)
 

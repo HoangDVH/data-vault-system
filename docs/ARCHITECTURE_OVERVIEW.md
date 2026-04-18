@@ -1,6 +1,6 @@
 # Kiến trúc tổng quan (dễ đọc)
 
-**Lưu ý:** Dữ liệu trong repo nằm trong **Web Worker (`rows[]` in-memory)**, không dùng IndexedDB.
+**Lưu ý:** **`rows[]`** trong Web Worker là nguồn đọc/ghi; sau **bulk insert**, snapshot được **IndexedDB** để không mất khi reload iframe.
 
 ---
 

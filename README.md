@@ -103,7 +103,7 @@ data-vault-system/
 
 ## Ghi chú triển khai
 
-- Dữ liệu nằm **trong worker**, **không** IndexedDB; reload trang mất trạng thái trừ khi gọi lại `INIT`/bulk.
+- Dữ liệu hoạt động trong **worker** (`rows[]`). Sau **bulk insert**, snapshot được lưu **IndexedDB** (trong worker); reload iframe vẫn thấy các dòng đã bulk. Seed demo 500k từ `INIT` không ghi disk — reload sẽ generate lại giống lần đầu nếu chưa từng bulk (hoặc đã xóa dữ liệu site).
 - Deploy hai app lên hai URL khác nhau: cập nhật `VITE_VAULT_ORIGIN`, `VITE_ALLOWED_PARENT_ORIGINS`, và secret production.
 
 ---

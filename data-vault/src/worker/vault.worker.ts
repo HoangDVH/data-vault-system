@@ -1,3 +1,5 @@
+import { loadRowsSnapshot, saveRowsSnapshot } from "./idbSnapshot.ts";
+
 export type UserWire = { id: number; name: string };
 
 type Row = UserWire & { nameLc: string };
@@ -9,6 +11,26 @@ const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
 let rows: Row[] = [];
+
+/** Restore IndexedDB snapshot before handling any RPC (iframe reload keeps data). */
+const restorePromise = (async () => {
+  try {
+    const snap = await loadRowsSnapshot();
+    if (snap && snap.length > 0) {
+      rows = snap.map((r) => ({
+        id: r.id,
+        name: r.name,
+        nameLc: r.nameLc,
+      }));
+    }
+  } catch {
+    /* ignore corrupt / unavailable IDB */
+  }
+})();
+
+async function ready(): Promise<void> {
+  await restorePromise;
+}
 
 function generateData(size: number): Row[] {
   const out: Row[] = new Array(size);
@@ -29,6 +51,8 @@ async function runBulkInsertAsync(
   clientId: string,
   payload: { count?: number },
 ): Promise<void> {
+  await ready();
+
   const requested = payload?.count ?? 50000;
   const count = Math.min(Math.max(1, requested), 1_000_000);
 
@@ -45,6 +69,8 @@ async function runBulkInsertAsync(
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
+
+    await saveRowsSnapshot(rows);
 
     self.postMessage({
       id: clientId,
@@ -118,7 +144,11 @@ function searchPaginated(
   };
 }
 
-self.onmessage = (e: MessageEvent<{ id: string; type: string; payload: unknown }>) => {
+async function handleMessage(
+  e: MessageEvent<{ id: string; type: string; payload: unknown }>,
+): Promise<void> {
+  await ready();
+
   const { id, type, payload } = e.data;
 
   if (type === "BULK_INSERT") {
@@ -130,10 +160,14 @@ self.onmessage = (e: MessageEvent<{ id: string; type: string; payload: unknown }
     let result: unknown;
 
     switch (type) {
-      case "INIT":
-        rows = generateData(payload as number);
+      case "INIT": {
+        const seedSize = payload as number;
+        if (rows.length === 0) {
+          rows = generateData(seedSize);
+        }
         result = true;
         break;
+      }
 
       case "GET_DATA": {
         const n = Math.min(RESULT_CAP, rows.length);
@@ -182,4 +216,8 @@ self.onmessage = (e: MessageEvent<{ id: string; type: string; payload: unknown }
     const message = err instanceof Error ? err.message : String(err);
     self.postMessage({ id, error: message });
   }
+}
+
+self.onmessage = (e) => {
+  void handleMessage(e);
 };
