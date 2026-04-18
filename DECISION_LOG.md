@@ -15,9 +15,7 @@ Hai bên giao tiếp thông qua một **asynchronous message bus** (`postMessage
 - **Security boundary rõ ràng** — Iframe tạo ra sandbox tự nhiên → giảm nguy cơ data leakage / XSS escalation  
 - **Extensibility** — Kiến trúc này có thể evolve thành Web Worker (compute-heavy), Remote service (microservice thật), mà không thay đổi contract  
 
-**Lý do khớp code:**
 
-- Hai **origin** khác nhau → không chia sẻ biến JS trực tiếp; ranh giới buộc thiết kế **chỉ truyền payload nhỏ** qua biên (`postMessage`), không kéo cả `rows[]` về main app.
 
 
 ### 1.2. Hai lớp “protocol” (không nhầm lẫn)
