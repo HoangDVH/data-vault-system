@@ -18,7 +18,7 @@ Hai bên giao tiếp thông qua một **asynchronous message bus** (`postMessage
 **Lý do khớp code:**
 
 - Hai **origin** khác nhau → không chia sẻ biến JS trực tiếp; ranh giới buộc thiết kế **chỉ truyền payload nhỏ** qua biên (`postMessage`), không kéo cả `rows[]` về main app.
-- **data-vault** lọc `event.origin` qua `ALLOWED_PARENT_ORIGINS` (mặc định `http://localhost:5174`, `http://127.0.0.1:5174`, cộng thêm `VITE_ALLOWED_PARENT_ORIGINS`) — xem `data-vault/src/main.ts`.
+
 
 ### 1.2. Hai lớp “protocol” (không nhầm lẫn)
 
