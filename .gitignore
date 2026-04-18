@@ -1,0 +1,22 @@
+# Dependencies & build
+node_modules/
+dist/
+dist-ssr/
+
+# Env — never commit secrets (copy from .env.example)
+.env
+.env.*
+!.env.example
+
+# Logs & local
+logs/
+*.log
+npm-debug.log*
+*.local
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
