@@ -1,19 +1,19 @@
 # DECISION_LOG — Data Vault System
 
-**Mục đích:** Ghi lại *vì sao* chọn hướng đi, *đánh đổi* gì, vấn đề hiệu năng và cách xử lý trong code thực tế, cùng vai trò AI — để đánh giá được tư duy kiến trúc chứ không chỉ “tính năng chạy được”.
-
-**Phạm vi code:** **main-app** (React, iframe parent) · **data-vault** (iframe nhận `postMessage`, điều phối worker) · **shared/vaultProtocol.ts** (envelope có ký, kiểm tra phiên bản và thời gian).
-
 **Điều quan trọng:** Toàn bộ **dữ liệu người dùng được lưu trong worker dưới dạng mảng trong RAM** (`data-vault/src/worker/vault.worker.ts`). **Không dùng IndexedDB, không LocalStorage cho dataset.**
 
 ---
 
 ## 1. Technical choices — Kiến trúc và code path
-
-### 1.1. Hard isolation: Main app ↔ Data Vault (iframe, origin khác)
-
-- **Main app** (Vite dev thường `:5174`): UI — ô tìm kiếm (debounce), filter Min/Max ID, bảng ảo hóa, phân trang, nút bulk insert, toast.
-- **Data vault** (thường `:5173`): chạy trong `<iframe>`, không render UI nặng cho parent; nhận RPC qua `postMessage`, forward xuống **Dedicated Worker**.
+### 1.1 Architectural Decision: Hard Isolation via Iframe + Message Bus
+Thay vì sử dụng shared state hoặc gọi API trực tiếp, tôi chủ động thiết kế hệ thống theo hướng **hard isolation**:
+- **Main App** → chỉ chịu trách nhiệm UI/UX  
+- **Data Vault (iframe)** → chịu trách nhiệm data processing & storage  
+Hai bên giao tiếp thông qua một **asynchronous message bus** (`postMessage`).
+**Lý do chiến lược:**
+- **Enforced separation of concerns (SoC)** — UI layer hoàn toàn không phụ thuộc vào data layer → dễ maintain và scale  
+- **Security boundary rõ ràng** — Iframe tạo ra sandbox tự nhiên → giảm nguy cơ data leakage / XSS escalation  
+- **Extensibility** — Kiến trúc này có thể evolve thành Web Worker (compute-heavy), Remote service (microservice thật), mà không thay đổi contract  
 
 **Lý do khớp code:**
 
@@ -112,4 +112,3 @@ Pipeline cần nhìn xuyên suốt: **worker CPU + độ lớn payload qua ifram
 
 ---
 
-*Cập nhật theo codebase tại thời điểm chỉnh sửa; nếu thêm persistence hoặc index, cần sửa mục 1.3 và 1.6 cho khớp.*
