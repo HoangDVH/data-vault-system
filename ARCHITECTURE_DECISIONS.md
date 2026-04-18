@@ -1,7 +1,5 @@
 # Architecture & Design Decisions — Narrative
 
-**Đối chiếu codebase:** Chi tiết triển khai hiện tại (iframe, `vaultProtocol`, worker, mảng in-memory, phân trang, virtualization) nằm trong [`DECISION_LOG.md`](DECISION_LOG.md). Tài liệu này trình bày **lớp quyết định kiến trúc và hướng suy nghĩ** (kể cả phương án mở rộng như IndexedDB / query có index); không thay thế mô tả fact trong `DECISION_LOG.md`.
-
 ---
 
 ## 1. Technical Choices
@@ -82,8 +80,6 @@ type Response = {
 
 - Query-based (không scan toàn bộ)  
 - Index-first thinking  
-
-*(Hướng mở rộng; implementation hiện tại: worker + in-memory + chiến lược scan/pagination — xem `DECISION_LOG.md`.)*
 
 ---
 
