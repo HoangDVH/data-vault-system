@@ -1,6 +1,5 @@
 # DECISION_LOG — Data Vault System
 
-**Điều quan trọng:** Dataset hoạt động trong **Web Worker** (`rows[]` trong RAM). Sau **bulk insert**, snapshot được **ghi IndexedDB** (`idbSnapshot.ts`); khi reload iframe/worker, snapshot được **đọc lại** trước `INIT`. Seed mặc định (`INIT`, 500k dòng demo) không ghi disk để tránh một lần serialize quá lớn; chỉ mutate qua bulk mới persist.
 
 ---
 
