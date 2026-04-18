@@ -5,6 +5,7 @@ import { SearchBox } from "./components/SearchBox";
 import { Toast } from "./components/Toast";
 import { useSearch } from "./hooks/useSearch";
 import { messageBus } from "./messaging/messageBus";
+import { getVaultOrigin, vaultDisplayHost } from "./vaultOrigin";
 import type {
   BulkInsertResponse,
   SearchFilters,
@@ -344,13 +345,13 @@ export default function App() {
           </div>
 
           <p className="shrink-0 border-t border-slate-100 px-4 py-2 text-center text-[10px] text-slate-400 sm:px-5">
-            Vault · 5173 · Main · 5174
+            Vault @{vaultDisplayHost()} · main app
           </p>
         </div>
 
         <iframe
           id="vault-frame"
-          src="http://localhost:5173"
+          src={getVaultOrigin()}
           className="hidden"
           title="Data vault"
         />

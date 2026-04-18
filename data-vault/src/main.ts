@@ -8,13 +8,25 @@ import {
 import { worker, type SearchPayload } from "./worker/workerProxy";
 
 /**
- * Origin of the parent app that embeds this iframe (postMessage sender).
- * Must match where main-app runs (e.g. Vite default for main-app is 5174).
+ * Parent origins allowed to postMessage into this iframe.
+ * Local dev defaults + optional VITE_ALLOWED_PARENT_ORIGINS (comma-separated, e.g. https://main-app.vercel.app).
  */
-const ALLOWED_PARENT_ORIGINS = new Set([
-  "http://localhost:5174",
-  "http://127.0.0.1:5174",
-]);
+function buildAllowedParentOrigins(): Set<string> {
+  const set = new Set([
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+  ]);
+  const raw = import.meta.env.VITE_ALLOWED_PARENT_ORIGINS as string | undefined;
+  if (raw) {
+    for (const part of raw.split(",")) {
+      const o = part.trim().replace(/\/+$/, "");
+      if (o) set.add(o);
+    }
+  }
+  return set;
+}
+
+const ALLOWED_PARENT_ORIGINS = buildAllowedParentOrigins();
 
 window.addEventListener("message", async (event) => {
   if (!ALLOWED_PARENT_ORIGINS.has(event.origin)) {
