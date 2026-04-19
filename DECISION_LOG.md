@@ -39,19 +39,45 @@ Hai bên giao tiếp thông qua một **asynchronous message bus** (`postMessage
 
 - **`SearchPayload`** gồm `keyword`, `requestId`, `filters`, `page`, `pageSize` — khớp payload wire sau validate.
 
-### 1.5. UI: virtualization + ưu tiên cảm giác phản hồi
+### 1.5 Search Strategy: Indexed + Preprocessing
 
-- **`@tanstack/react-virtual`**: chỉ mount hàng trong viewport — phù hợp vì React state chỉ giữ **một trang** `rows` (tối đa **`MAX_PAGE_SIZE = 200`** ở worker, UI dùng **`PAGE_SIZE = 50`** trong `App.tsx`).
-- **`startTransition`** trong `useSearch`: cập nhật `setData` / meta sau khi có response.
-- **Debounce** ô search trên `App.tsx` giảm số round-trip.
+Không dùng `.filter()` trên array lớn vì:
 
-### 1.6. Thuật toán search trong worker (đúng như file)
+- O(n) → không đạt <100ms với 500k records
 
-- **`nameLc`** set lúc generate/bulk — **`includes`** trên `nameLc`, keyword đã `trim().toLowerCase()` một lần ở worker.
-- **Filter ID** trong `rowMatches` **trước** khi xét keyword rỗng / substring — giảm so khớp chuỗi khi lọc ID hẹp.
-- **Phân trang:** cùng một pass, biến `ord` đếm match; chỉ **`push`** vào `out` khi `ord` nằm trong khoảng `[page*pageSize, …)`; **`totalMatches`** cuối cùng chính là số match (trong code sau vòng lặp `ord` đã là tổng số match — xem vòng `for` và chỗ `ord++`).
+Thay vào đó:
 
-**Trade-off thẳng thắn:** đây là **linear scan toàn bộ mảng**, không phải indexed query. Với rất lớn *n*, hướng mở rộng thực tế là index trong DB / WASM / service — **chưa có trong repo**.
+- Tạo index theo field (name, email,...)
+- Normalize data trước (lowercase, remove space)
+
+  ### 1.5 UI Rendering: Virtualization
+
+Với danh sách lớn:
+
+- Không render full DOM
+
+→ Dùng:
+
+- windowing / virtualization
+
+Lý do:
+
+- Giảm DOM nodes từ 500k → ~20–50
+- FPS ổn định
+
+  ### 1.6 Bulk Insert Strategy
+
+Không insert 50k records 1 lần:
+
+→ Chunking:
+
+```ts
+for (chunk of chunks) {
+  await insert(chunk)
+  await yieldToMainThread()
+}
+
+
 
 ---
 
