@@ -50,7 +50,7 @@ Thay vào đó:
 - Tạo index theo field (name, email,...)
 - Normalize data trước (lowercase, remove space)
 
-  ### 1.5 UI Rendering: Virtualization
+### 1.6 UI Rendering: Virtualization
 
 Với danh sách lớn:
 
@@ -65,17 +65,32 @@ Lý do:
 - Giảm DOM nodes từ 500k → ~20–50
 - FPS ổn định
 
-  ### 1.6 Bulk Insert Strategy
+### 1.7 Bulk Insert Strategy
 
-Không insert 50k records 1 lần:
+**Hướng xử lý:** Ghi theo **từng lát**, giữa các lát **nhường CPU** một nhịp; xong thì **lưu IndexedDB** rồi mới báo thành công cho UI.
 
-→ Chunking:
+#### Trong `runBulkInsertAsync` (`vault.worker.ts`)
 
-```ts
-for (chunk of chunks) {
-  await insert(chunk)
-  await yieldToMainThread()
-}
+| Bước | Ý nghĩa ngắn gọn |
+|------|------------------|
+| **`await ready()`** | Chờ đọc snapshot cũ xong trước khi insert — tránh chèn bulk lên trạng thái chưa khôi phục. |
+| **`count` có giới hạn** | `clamp` trong khoảng **1 … 1 000 000**. UI mặc định **50 000**. Trần phòng nhập nhầm / payload quá lớn. |
+| **`rows.length = start + count`** | Mở rộng mảng **một lần** (đủ chỗ cho batch mới). Tránh `.push` liên tục khiến mảng phải **tăng buffer nhiều lần**. |
+| **Lát `BULK_SLICE = 16_000`** | Mỗi lát: vòng `for` gán nhanh từng `Row` (`id`, `name`, `nameLc`). ID nối tiếp: `start + i`. |
+| **`await setTimeout(0)` sau mỗi lát** | **Nhường một nhịp** — bulk không nuốt worker suốt một đoạn dài; các tin trong hàng đợi có **cơ hội** được xử lý xen giữa các lát (không cam kết real-time tuyệt đối). |
+| **`await saveRowsSnapshot(rows)` trước tin success** | User thấy toast “xong” thì IndexedDB đã có **đúng** `rows` sau bulk — reload ngay không bị “chưa kịp ghi”. |
+| **Trả `{ inserted, totalRows }`** | UI cập nhật toast và tổng số dòng. |
+
+#### Đánh đổi `BULK_SLICE`
+
+- **Slice lớn** → ít nhịp nhường → bulk có thể **xong nhanh hơn**, nhưng mỗi đoạn đồng bộ **dài** → ít chỗ xen `SEARCH`.
+- **Slice nhỏ** → nhường **thường xuyên** → vault **mềm** hơn khi user tìm xen kẽ, nhưng **nhiều nhịp yield** hơn.
+
+#### UI (main-app)
+
+- Bulk dùng timeout **120s** trên `messageBus`.
+- Sau bulk: tắt cờ **`bulkWorking`**, gọi **`void search(...)`** (không `await`) để làm mới danh sách mà không kéo dài trạng thái loading.
+
 
 
 
